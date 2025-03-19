@@ -1,24 +1,31 @@
 import logging
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-# Configuración del logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# Configuración de la conexión a PostgreSQL
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 def connect_to_db():
     try:
         connection = psycopg2.connect(
             dbname="tasks_bd",
             user="postgres",
-            password="123",  # Reemplázalo con tu contraseña real
+            password="123",
             host="localhost",
             port="5435",
             options="-c client_encoding=UTF8",
@@ -30,16 +37,15 @@ def connect_to_db():
         logger.error(f"Error connecting to database: {error}")
         raise HTTPException(status_code=500, detail=f"Error connecting to database: {error}")
 
-# Crear tablas en la base de datos
 def create_tables():
     conn = connect_to_db()
     try:
         with conn.cursor() as cursor:
-            # Script SQL para crear las tablas
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id SERIAL PRIMARY KEY,
                     name VARCHAR(255) NOT NULL,
+                    enabled BOOLEAN DEFAULT TRUE,
                     created_at TIMESTAMP DEFAULT NOW()
                 );
 
@@ -61,19 +67,18 @@ def create_tables():
     finally:
         conn.close()
 
-# Llamar a create_tables() al iniciar la aplicación
 @app.on_event("startup")
 def startup_event():
     create_tables()
 
-# Modelos Pydantic
 class User(BaseModel):
     user_id: int
     name: str
+    enabled: bool
     created_at: datetime
 
     class Config:
-        from_attributes = True  # Reemplaza orm_mode
+        from_attributes = True
 
 class Task(BaseModel):
     id: int
@@ -81,7 +86,7 @@ class Task(BaseModel):
     description: Optional[str] = None
     status: str = Field("pending", pattern="^(pending|in progress|completed)$")
     created_at: datetime
-    user_id: int  # Relación con User
+    user_id: int
 
     class Config:
         from_attributes = True
@@ -92,7 +97,6 @@ class TaskCreate(BaseModel):
     status: str = Field("pending", pattern="^(pending|in progress|completed)$")
     user_id: int
 
-# Endpoints
 @app.get("/connect")
 def connect():
     logger.info("Attempting to connect to the database.")
@@ -111,16 +115,16 @@ def read_root():
 
 @app.get("/users", response_model=List[User])
 def get_users():
-    logger.info("Fetching users from the database.")
+    logger.info("Fetching active users from the database.")
     conn = connect_to_db()
     if not conn:
         logger.error("Database connection failed.")
         raise HTTPException(status_code=500, detail="Database connection failed")
     try:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT user_id, name, created_at FROM users;")
+            cursor.execute("SELECT user_id, name, enabled, created_at FROM users WHERE enabled = TRUE;")
             users = cursor.fetchall()
-            logger.info(f"Fetched {len(users)} users.")
+            logger.info(f"Fetched {len(users)} active users.")
         return users
     finally:
         conn.close()
@@ -162,7 +166,7 @@ def create_task(task: TaskCreate):
             logger.info(f"New task created: {new_task}")
         return new_task
     except Exception as error:
-        conn.rollback()  # Rollback the transaction in case of error
+        conn.rollback()
         logger.error(f"Error during task creation: {error}")
         raise HTTPException(status_code=500, detail="Error creating task")
     finally:
@@ -189,7 +193,7 @@ def update_task(task_id: int, task: TaskCreate):
             raise HTTPException(status_code=404, detail="Task not found")
         return updated_task
     except Exception as error:
-        conn.rollback()  # Rollback the transaction in case of error
+        conn.rollback()
         logger.error(f"Error during task update: {error}")
         raise HTTPException(status_code=500, detail="Error updating task")
     finally:
